@@ -3,13 +3,17 @@ import logging
 import re
 import time
 from random import randint
-
+import requests
 import pandas as pd
 import pendulum
+from google.cloud import storage
+
 from ishare_utils.constants import BASE_LINK, PROJECT_ID, TICKER_CSV_LINKS
 
 
-async def run_async_get_csv(session, bucket, date):
+async def run_async_get_csv(
+    session: requests.Session(), bucket: storage.Client.bucket(), date: str
+):
     tasks = [
         asyncio.create_task(async_get_csv(ticker, csv_link, session, bucket, date))
         for ticker, csv_link in TICKER_CSV_LINKS.items()
@@ -19,7 +23,13 @@ async def run_async_get_csv(session, bucket, date):
     return results
 
 
-async def async_get_csv(ticker, csv_link, session, bucket, date):
+async def async_get_csv(
+    ticker: str,
+    csv_link: str,
+    session: requests.Session(),
+    bucket: storage.Client.bucket(),
+    date: str,
+):
     await asyncio.sleep(randint(0, 5))
 
     csv_dl_link = f"{BASE_LINK}{csv_link}"
@@ -65,7 +75,13 @@ async def async_get_csv(ticker, csv_link, session, bucket, date):
         return f"Failed to get data for {ticker} at {csv_dl_link}"
 
 
-def get_csv(ticker, csv_link, session, bucket, date):
+def get_csv(
+    ticker: str,
+    csv_link: str,
+    session: requests.Session(),
+    bucket: storage.Client.bucket(),
+    date: str,
+):
     time.sleep(randint(0, 5))
 
     csv_dl_link = f"{BASE_LINK}{csv_link}"
@@ -112,7 +128,11 @@ def get_csv(ticker, csv_link, session, bucket, date):
 
 
 def process_csv_and_export_gbq(
-    blob, info_columns, renamed_columns, df_schema, gbq_schema
+    blob: storage.Client.bucket.blob,
+    info_columns: list,
+    renamed_columns: list,
+    df_schema: list,
+    gbq_schema: list,
 ):
     fund_ticker = blob.name.split("/")[-1][:-4]
     type_of_fund = blob.name.split("/")[1]

@@ -62,6 +62,7 @@ def ishare_index_data_dag():
 
         logging.info(f"Reading {len(blobs)} blobs.")
 
+        # can't make this tasks async because Google cloud storage is limiting
         for blob in blobs:
             process_csv_and_export_gbq(
                 blob,
