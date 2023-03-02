@@ -1,20 +1,22 @@
+import asyncio
 import datetime
 import logging
 
 import pendulum
 from airflow.decorators import dag, task
-
-import re
-
 from ishare_utils.constants import (
-    BASE_LINK,
+    BOND_COLUMNS,
     BUCKET_NAME,
-    PROJECT_ID,
-    STOCK_COLUMNS,
-    TICKER_CSV_LINKS,
+    ISHARE_BOND_DF_SCHEMA,
+    ISHARE_BOND_SCHEMA,
+    ISHARE_STOCK_DF_SCHEMA,
     ISHARE_STOCK_SCHEMA,
+    PROJECT_ID,
+    RENAMED_BOND_COLUMNS,
     RENAMED_STOCK_COLUMNS,
+    STOCK_COLUMNS,
 )
+from ishare_utils.helper import process_csv_and_export_gbq, run_async_get_csv
 
 default_args = {"retries": 5, "retry_delay": datetime.timedelta(seconds=15)}
 
@@ -34,54 +36,13 @@ def ishare_index_data_dag():
         from google.cloud import storage
 
         session = requests.Session()
+
         storage_client = storage.Client(PROJECT_ID)
-        date = data_interval_end.format("YYYY-MM-DD")
         bucket = storage_client.bucket(BUCKET_NAME)
 
-        for ticker, csv_link in TICKER_CSV_LINKS.items():
-            csv_dl_link = f"{BASE_LINK}{csv_link}"
-            response = session.get(csv_dl_link)
+        date = data_interval_end.format("YYYY-MM-DD")
 
-            attempts = 0
-            while response.status_code != 200 and attempts > 3:
-                response = session.get(csv_dl_link)
-                attempts += 1
-                logging.info(f"Failed to get data for {ticker} at {csv_dl_link}")
-
-            if response.status_code == 200:
-                csv_content = response.content
-
-                # up to the second occurance of b"\n\xc2\xa0\n" is all the info we need
-                # The rest is disclosure or info we already have
-                stop_points = [
-                    match for match in re.finditer(b"\n\xc2\xa0\n", csv_content)
-                ]
-                stop_point = stop_points[1].span()[0]
-
-                csv_content = csv_content[:stop_point]
-
-                if re.search(b"\nTicker", csv_content) and not re.search(
-                    b"YTM \(%\)", csv_content
-                ):
-                    file_location = f"ishare_data/stock/{date}/{ticker}.csv"
-
-                elif re.search(b"\nName", csv_content):
-                    file_location = f"ishare_data/bond/{date}/{ticker}.csv"
-
-                else:
-                    file_location = f"ishare_data/other/{date}/{ticker}.csv"
-                    logging.info(
-                        f"Got unexpected file {ticker} dumping as {file_location}"
-                    )
-
-                logging.info(f"Got data for {ticker} dumping as {file_location}")
-
-                blob = bucket.blob(file_location)
-                with blob.open("wb") as f:
-                    f.write(csv_content)
-
-            else:
-                logging.info(f"Failed to get data for {ticker} at {csv_dl_link}")
+        asyncio.run(run_async_get_csv(session, bucket, date))
 
         return
 
@@ -99,57 +60,46 @@ def ishare_index_data_dag():
             )
         ]
 
-        logging.info(f"Reading {len(blobs)}.")
+        logging.info(f"Reading {len(blobs)} blobs.")
 
         for blob in blobs:
-            fund_ticker = blob.name.split("/")[-1][:-4]
+            process_csv_and_export_gbq(
+                blob,
+                STOCK_COLUMNS,
+                RENAMED_STOCK_COLUMNS,
+                ISHARE_STOCK_DF_SCHEMA,
+                ISHARE_STOCK_SCHEMA,
+            )
+        return
 
-            try:
-                with blob.open("r") as f:
-                    df = pd.read_csv(f, skiprows=9).dropna(subset="Name")
-                    f.seek(0)
-                    df["fund_ticker"] = fund_ticker
-                    df["name_of_fund"] = f.readline().replace("\n", "")
+    @task
+    def read_ishare_bond_data(data_interval_end=None):
+        import pandas as pd
+        from google.cloud import storage
 
-                    date_string = re.search(r"\"(.*)\"", f.readline()).group(1)
-                    fund_holdings_as_of_date = pendulum.from_format(
-                        date_string, "MMM D, YYYY"
-                    ).date()
+        storage_client = storage.Client(PROJECT_ID)
+        date = data_interval_end.format("YYYY-MM-DD")
+        blobs = [
+            blob
+            for blob in storage_client.list_blobs(
+                BUCKET_NAME, prefix=f"ishare_data/bond/{date}"
+            )
+        ]
 
-                    df["fund_holdings_as_of"] = fund_holdings_as_of_date
+        logging.info(f"Reading {len(blobs)} blobs.")
 
-                df = df[STOCK_COLUMNS]
-                df.columns = RENAMED_STOCK_COLUMNS
-
-                str_to_num = [
-                    "market_value",
-                    "notional_value",
-                    "shares",
-                    "price",
-                    "fx_rate",
-                ]
-
-                for column in str_to_num:
-                    df[column] = (
-                        df[column].astype(str).str.replace(",", "").astype(float)
-                    )
-
-                table_export_name = f"ishare.stock_{fund_ticker}_{fund_holdings_as_of_date.format('YYYY-MM-DD')}"
-
-                df.to_gbq(
-                    table_export_name,
-                    project_id=PROJECT_ID,
-                    if_exists="replace",
-                    table_schema=ISHARE_STOCK_SCHEMA,
-                )
-
-                logging.info(f"Exported {table_export_name}.")
-            except Exception as e:
-                logging.info(f"Issue sending {fund_ticker} to bigquery because {e}")
+        for blob in blobs:
+            process_csv_and_export_gbq(
+                blob,
+                BOND_COLUMNS,
+                RENAMED_BOND_COLUMNS,
+                ISHARE_BOND_DF_SCHEMA,
+                ISHARE_BOND_SCHEMA,
+            )
 
         return
 
-    get_and_dump_ishare_data() >> [read_ishare_stock_data()]
+    get_and_dump_ishare_data() >> [read_ishare_stock_data(), read_ishare_bond_data()]
 
 
 ishare_index_data_dag()
