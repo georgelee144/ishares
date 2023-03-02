@@ -56,7 +56,7 @@ async def async_get_csv(
         ):
             file_location = f"ishare_data/stock/{date}/{ticker}.csv"
 
-        elif re.search(b"\nName", csv_content):
+        elif re.search(b"\nName", csv_content) and not re.search(b"Strike price"):
             file_location = f"ishare_data/bond/{date}/{ticker}.csv"
 
         else:
