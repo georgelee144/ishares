@@ -8,5 +8,6 @@ Each csv file is saved to Google Cloud Storage.
 Each csv is then read to processed to be stored to Google BigQuery.
 
 
-Currently only ETFs that contain stocks are uploaded to Big Query.
-Working on BOnds and making this async
+Ignored other as many of them don't contain anything useful
+
+Google Cloud Storage doesn't really allow for async read calls
